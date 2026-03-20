@@ -42,7 +42,7 @@ def calculate_returns(prices: pd.DataFrame, periods: List[int]) -> pd.DataFrame:
         periods: List of lookback periods (e.g., [5, 10, 20])
         
     Returns:
-        Dictionary with returns for each period
+        Dict mapping each period to its returns DataFrame
     """
     returns = {}
     for period in periods:
@@ -443,7 +443,8 @@ def ml_rank_signals(
                 return pd.Series(predictions, index=ticker_list)
             except (ImportError, OSError, Exception) as e:
                 # Fallback to simple average if ML fails
-                pass
+                import logging
+                logging.getLogger(__name__).warning("ML ranking failed, using simple average: %s", e)
     
     # Fallback: Simple weighted average (equal weights)
     composite_scores = features_df.mean(axis=1)
@@ -759,8 +760,14 @@ def get_latest_scores(
     """
     if date is None:
         latest = scores.iloc[-1]
-    else:
+    elif date in scores.index:
         latest = scores.loc[date]
+    else:
+        # Use the most recent available date before the requested date
+        valid_dates = scores.index[scores.index <= date]
+        if len(valid_dates) == 0:
+            return pd.Series(dtype=float)
+        latest = scores.loc[valid_dates[-1]]
     
     # Drop NaN values and sort
     latest = latest.dropna().sort_values(ascending=False)

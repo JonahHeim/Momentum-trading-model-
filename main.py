@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from universe_selection import get_universe
-from data_collection import fetch_price_data, validate_data, get_vix_data
+from data_collection import fetch_price_data, validate_data, get_vix_data, get_spy_data
 from backtesting import BacktestEngine
 from performance_evaluation import generate_report
 
@@ -28,8 +28,21 @@ def main():
     parser.add_argument('--rebalance-freq', type=int, default=3, help='Rebalance frequency in days')
     parser.add_argument('--period', type=str, default='1y', help='Data period (e.g., 6mo, 1y, 2y)')
     parser.add_argument('--output', type=str, default='backtest_results', help='Output file prefix')
-    
+
     args = parser.parse_args()
+
+    # Validate arguments
+    if args.capital <= 0:
+        parser.error("--capital must be positive")
+    if args.holding_period <= 0:
+        parser.error("--holding-period must be a positive integer")
+    if args.rebalance_freq <= 0:
+        parser.error("--rebalance-freq must be a positive integer")
+    if args.sample_size <= 0:
+        parser.error("--sample-size must be a positive integer")
+    valid_periods = {'1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max'}
+    if args.period not in valid_periods:
+        parser.error(f"--period must be one of: {', '.join(sorted(valid_periods))}")
     
     print("="*70)
     print("ADVANCED MOMENTUM TRADING STRATEGY")
@@ -62,21 +75,31 @@ def main():
     # Step 2: Data Collection
     print("STEP 2: Data Collection")
     print("-" * 70)
-    prices = fetch_price_data(universe, period=args.period, interval="1d")
-    
+    prices, volumes = fetch_price_data(universe, period=args.period, interval="1d", return_volumes=True)
+
     if prices.empty:
         print("Error: Failed to fetch price data")
         return
-    
+
     # Validate data
     prices = validate_data(prices, min_days=60)
-    
+    # Keep only volumes for tickers that passed validation
+    if not volumes.empty:
+        common_tickers = prices.columns.intersection(volumes.columns)
+        volumes = volumes[common_tickers].reindex(prices.index)
+
     if len(prices.columns) < 20:
         print(f"Warning: Insufficient valid tickers ({len(prices.columns)}). Need at least 20.")
         return
-    
+
     print(f"Valid tickers: {len(prices.columns)}\n")
-    
+
+    # Fetch SPY for relative strength signals in the backtest
+    print("Fetching SPY data for relative strength signals...")
+    spy_prices = get_spy_data(period=args.period)
+    if not spy_prices.empty:
+        print(f"SPY data: {len(spy_prices)} days")
+
     # Optional: Get VIX data for regime filtering
     print("Fetching VIX data for regime analysis...")
     vix_data = get_vix_data(period=args.period)
@@ -101,7 +124,11 @@ def main():
         cash_buffer=0.05
     )
     
-    results = engine.run_backtest(prices)
+    results = engine.run_backtest(
+        prices,
+        volumes=volumes if not volumes.empty else None,
+        spy_prices=spy_prices if not spy_prices.empty else None,
+    )
     
     # Step 4: Performance Evaluation
     print("\nSTEP 4: Performance Evaluation")
@@ -116,9 +143,9 @@ def main():
             benchmark_normalized = benchmark / benchmark.iloc[0] * args.capital
         else:
             benchmark_normalized = None
-    except:
+    except Exception as e:
         benchmark_normalized = None
-        print("Warning: Could not fetch benchmark data")
+        print(f"Warning: Could not fetch benchmark data: {e}")
     
     # Generate report
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

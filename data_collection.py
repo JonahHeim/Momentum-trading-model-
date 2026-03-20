@@ -3,12 +3,15 @@ Data Collection Module
 Handles fetching and preprocessing price data from Yahoo Finance.
 """
 
+import logging
 import yfinance as yf
 import pandas as pd
 import numpy as np
 from typing import List, Optional, Dict
 import warnings
 warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_price_data(
@@ -105,8 +108,7 @@ def fetch_price_data(
         return adj_close
         
     except Exception as e:
-        print(f"Error fetching price data: {e}")
-        import traceback
+        logger.warning("Batch price fetch failed, trying alternative method: %s", e)
         print("Trying alternative download method...")
         # Fallback: download individually
         adj_close = pd.DataFrame()
@@ -121,9 +123,9 @@ def fetch_price_data(
                         adj_close[ticker] = hist['Adj Close']
                     else:
                         adj_close[ticker] = hist['Close']
-            except:
+            except Exception:
                 continue
-        
+
         if not adj_close.empty:
             print(f"✅ Retrieved {len(adj_close.columns)} tickers using fallback method")
             return adj_close
@@ -295,7 +297,8 @@ def get_sector_info(ticker: str) -> str:
         stock = yf.Ticker(ticker)
         info = stock.info
         return info.get('sector', 'Unknown')
-    except:
+    except Exception as e:
+        logger.debug("Could not fetch sector for %s: %s", ticker, e)
         return 'Unknown'
 
 

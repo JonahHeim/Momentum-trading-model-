@@ -3,10 +3,13 @@ Portfolio Construction Module
 Handles position sizing, weighting, and risk management.
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from typing import Tuple, Dict, List, Optional
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_volatility_weights(
@@ -58,7 +61,8 @@ def get_sector_weights(tickers: List[str]) -> Dict[str, float]:
             info = stock.info
             sector = info.get('sector', 'Unknown')
             sector_counts[sector] = sector_counts.get(sector, 0) + 1
-        except:
+        except Exception as e:
+            logger.debug("Could not fetch sector for %s: %s", ticker, e)
             sector_counts['Unknown'] = sector_counts.get('Unknown', 0) + 1
     
     total = sum(sector_counts.values())
@@ -157,14 +161,16 @@ def apply_volatility_target(
     for ticker, pos in positions.get('long_positions', {}).items():
         updated_pos = pos.copy()
         updated_pos['value'] = pos['value'] * vol_scale
-        updated_pos['shares'] = int(updated_pos['value'] / prices[ticker].iloc[-1])
+        updated_pos['shares'] = max(1, round(updated_pos['value'] / prices[ticker].iloc[-1]))
+        updated_pos['value'] = updated_pos['shares'] * prices[ticker].iloc[-1]
         updated_pos['weight'] = pos['weight'] * vol_scale
         updated_positions['long_positions'][ticker] = updated_pos
-    
+
     for ticker, pos in positions.get('short_positions', {}).items():
         updated_pos = pos.copy()
         updated_pos['value'] = pos['value'] * vol_scale
-        updated_pos['shares'] = int(updated_pos['value'] / prices[ticker].iloc[-1])
+        updated_pos['shares'] = max(1, round(updated_pos['value'] / prices[ticker].iloc[-1]))
+        updated_pos['value'] = updated_pos['shares'] * prices[ticker].iloc[-1]
         updated_pos['weight'] = pos['weight'] * vol_scale
         updated_positions['short_positions'][ticker] = updated_pos
     
@@ -229,20 +235,20 @@ def construct_portfolio(
             weight = long_weights[ticker]
             position_value = long_capital * weight
             current_price = prices[ticker].iloc[-1]
-            shares = int(position_value / current_price)
+            shares = max(1, round(position_value / current_price))
             long_positions[ticker] = {
                 'shares': shares,
                 'value': shares * current_price,
                 'weight': weight
             }
-    
+
     short_positions = {}
     for ticker in short_tickers:
         if ticker in short_weights.index:
             weight = short_weights[ticker]
             position_value = short_capital * weight
             current_price = prices[ticker].iloc[-1]
-            shares = int(position_value / current_price)
+            shares = max(1, round(position_value / current_price))
             short_positions[ticker] = {
                 'shares': shares,
                 'value': shares * current_price,

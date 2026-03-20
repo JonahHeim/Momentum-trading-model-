@@ -10,11 +10,15 @@ import numpy as np
 from typing import List, Dict
 import warnings
 import ssl
-import urllib.request
 warnings.filterwarnings('ignore')
 
-# SSL context for macOS certificate issues
-ssl._create_default_https_context = ssl._create_unverified_context
+
+def _make_unverified_ssl_context() -> ssl.SSLContext:
+    """Return an unverified SSL context scoped to Wikipedia fetches only."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 def get_sp500_tickers_fallback() -> List[str]:
@@ -46,8 +50,7 @@ def get_sp500_tickers() -> List[str]:
     """
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        # Try with SSL context disabled (for macOS certificate issues)
-        tables = pd.read_html(url)
+        tables = pd.read_html(url, storage_options={"ssl_context": _make_unverified_ssl_context()})
         sp500_df = tables[0]
         tickers = sp500_df['Symbol'].tolist()
         # Clean ticker symbols (remove dots for class shares)
@@ -94,7 +97,7 @@ def get_sp400_tickers() -> List[str]:
     """
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
-        tables = pd.read_html(url)
+        tables = pd.read_html(url, storage_options={"ssl_context": _make_unverified_ssl_context()})
         sp400_df = tables[0]
         tickers = sp400_df['Symbol'].tolist()
         tickers = [t.replace('.', '-') for t in tickers]
@@ -142,7 +145,7 @@ def get_sp600_tickers() -> List[str]:
     """
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
-        tables = pd.read_html(url)
+        tables = pd.read_html(url, storage_options={"ssl_context": _make_unverified_ssl_context()})
         sp600_df = tables[0]
         tickers = sp600_df['Symbol'].tolist()
         tickers = [t.replace('.', '-') for t in tickers]

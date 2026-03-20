@@ -3,11 +3,14 @@ Backtesting Engine
 Simulates strategy performance over historical data.
 """
 
+import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 import warnings
 warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
 
 from signal_calculation import (
     calculate_composite_score,
@@ -60,21 +63,26 @@ class BacktestEngine:
         self.returns = []
         self.positions_history = []
         self.trades = []
+        self.peak_prices = {}
     
     def run_backtest(
         self,
         prices: pd.DataFrame,
+        volumes: Optional[pd.DataFrame] = None,
+        spy_prices: Optional[pd.Series] = None,
         start_date: pd.Timestamp = None,
         end_date: pd.Timestamp = None
     ) -> Dict:
         """
         Run backtest on historical data.
-        
+
         Args:
             prices: DataFrame with price data
+            volumes: Optional DataFrame with volume data for composite signals
+            spy_prices: Optional Series with SPY prices for relative strength signals
             start_date: Start date for backtest (defaults to first date with enough data)
             end_date: End date for backtest (defaults to last date)
-            
+
         Returns:
             Dictionary with backtest results
         """
@@ -91,26 +99,22 @@ class BacktestEngine:
         
         # Calculate composite scores (momentum, RSI, MA, vol, volume)
         print("Calculating composite signals (momentum, RSI, MA, volatility, volume)...")
-        # Note: For backtesting, we'll use composite scores if volumes are available
-        # Otherwise fall back to momentum-only
         try:
-            # Try to get volumes for enhanced signals
-            from data_collection import fetch_price_data
-            _, volumes = fetch_price_data(prices.columns.tolist(), period="6mo", return_volumes=True)
-            from data_collection import get_spy_data
-            spy_prices = get_spy_data(period="6mo")
-            
-            if not volumes.empty and not spy_prices.empty:
+            if volumes is not None and not volumes.empty and spy_prices is not None and not spy_prices.empty:
                 scores = calculate_composite_score(
                     prices,
                     volumes=volumes,
                     benchmark_prices=spy_prices
                 )
                 print("  Using composite signals (all factors)")
+            elif volumes is not None and not volumes.empty:
+                scores = calculate_composite_score(prices, volumes=volumes)
+                print("  Using composite signals (no benchmark)")
             else:
                 scores = calculate_momentum_score(prices)
                 print("  Using momentum signals (fallback)")
-        except:
+        except Exception as e:
+            logger.warning("Composite score calculation failed, falling back to momentum: %s", e)
             scores = calculate_momentum_score(prices)
             print("  Using momentum signals (fallback)")
         
@@ -179,9 +183,12 @@ class BacktestEngine:
                             
                             entry_date = trade_date
                             
-                            # Apply transaction costs
-                            total_trades = len(portfolio['long_positions']) + len(portfolio['short_positions'])
-                            capital -= capital * self.transaction_cost * total_trades
+                            # Apply transaction costs based on trade value (not total capital)
+                            total_trade_value = (
+                                sum(p['value'] for p in portfolio['long_positions'].values()) +
+                                sum(p['value'] for p in portfolio['short_positions'].values())
+                            )
+                            capital -= total_trade_value * self.transaction_cost
                             
                             # Record trade
                             self.trades.append({
@@ -205,10 +212,6 @@ class BacktestEngine:
                 
                 # Apply stop losses (with trailing stops)
                 if current_positions and entry_prices:
-                    # Initialize peak_prices if not exists
-                    if not hasattr(self, 'peak_prices'):
-                        self.peak_prices = {}
-                    
                     updated_positions = apply_stop_loss(
                         current_positions,
                         prices.iloc[:date_idx+1],
@@ -222,15 +225,16 @@ class BacktestEngine:
                     for side in ['long_positions', 'short_positions']:
                         for ticker, pos in updated_positions.get(side, {}).items():
                             if pos.get('stop_loss', False):
-                                if ticker in current_positions.get(side, {}):
+                                if ticker in current_positions.get(side, {}) and ticker in prices.columns:
                                     current_price = prices.iloc[date_idx][ticker]
+                                    shares = current_positions[side][ticker]['shares']
                                     if side == 'long_positions':
-                                        shares = current_positions[side][ticker]['shares']
                                         capital += shares * current_price * (1 - self.transaction_cost)
                                     else:
-                                        shares = current_positions[side][ticker]['shares']
-                                        capital += shares * entry_prices[ticker] * (1 - self.transaction_cost)  # Short profit
-                                    
+                                        # Short P&L = entry_price - current_price per share
+                                        short_pnl = shares * (entry_prices[ticker] - current_price)
+                                        capital += short_pnl * (1 - self.transaction_cost)
+
                                     del current_positions[side][ticker]
                                     if ticker in entry_prices:
                                         del entry_prices[ticker]
@@ -304,14 +308,14 @@ class BacktestEngine:
                 pnl = shares * (current_price - entry_price)
                 capital += shares * current_price * (1 - self.transaction_cost)
         
-        # Close short positions
+        # Close short positions: realize P&L = entry_price - current_price per share
         for ticker, pos in positions.get('short_positions', {}).items():
             if ticker in current_prices.index:
                 shares = pos['shares']
                 entry_price = entry_prices.get(ticker, pos.get('entry_price', current_prices[ticker]))
                 current_price = current_prices[ticker]
-                pnl = shares * (entry_price - current_price)  # Inverse for shorts
-                capital += shares * entry_price * (1 - self.transaction_cost)  # Return borrowed shares
+                short_pnl = shares * (entry_price - current_price)
+                capital += short_pnl * (1 - self.transaction_cost)
         
         return capital
     
