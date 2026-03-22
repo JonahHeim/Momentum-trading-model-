@@ -321,7 +321,11 @@ def apply_stop_loss(
         Updated positions dictionary with stop-losses applied
     """
     current_prices = prices.iloc[-1]
-    updated_positions = positions.copy()
+    # Deep-copy inner dicts so we don't mutate the caller's positions
+    updated_positions = {
+        'long_positions': {k: dict(v) for k, v in positions.get('long_positions', {}).items()},
+        'short_positions': {k: dict(v) for k, v in positions.get('short_positions', {}).items()},
+    }
     
     if peak_prices is None:
         peak_prices = {}

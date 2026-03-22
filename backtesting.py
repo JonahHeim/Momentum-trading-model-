@@ -221,15 +221,16 @@ class BacktestEngine:
                         peak_prices=self.peak_prices
                     )
                     
-                    # Close stopped-out positions
+                    # Close stopped-out positions (iterate over snapshot to avoid mutation)
                     for side in ['long_positions', 'short_positions']:
-                        for ticker, pos in updated_positions.get(side, {}).items():
+                        for ticker, pos in list(updated_positions.get(side, {}).items()):
                             if pos.get('stop_loss', False):
                                 if ticker in current_positions.get(side, {}) and ticker in prices.columns:
                                     current_price = prices.iloc[date_idx][ticker]
                                     shares = current_positions[side][ticker]['shares']
                                     if side == 'long_positions':
-                                        capital += shares * current_price * (1 - self.transaction_cost)
+                                        long_pnl = shares * (current_price - entry_prices[ticker])
+                                        capital += long_pnl * (1 - self.transaction_cost)
                                     else:
                                         # Short P&L = entry_price - current_price per share
                                         short_pnl = shares * (entry_prices[ticker] - current_price)
@@ -299,14 +300,14 @@ class BacktestEngine:
         Returns:
             Updated capital after closing positions
         """
-        # Close long positions
+        # Close long positions: realize P&L = current_price - entry_price per share
         for ticker, pos in positions.get('long_positions', {}).items():
             if ticker in current_prices.index:
                 shares = pos['shares']
                 entry_price = entry_prices.get(ticker, pos.get('entry_price', current_prices[ticker]))
                 current_price = current_prices[ticker]
-                pnl = shares * (current_price - entry_price)
-                capital += shares * current_price * (1 - self.transaction_cost)
+                long_pnl = shares * (current_price - entry_price)
+                capital += long_pnl * (1 - self.transaction_cost)
         
         # Close short positions: realize P&L = entry_price - current_price per share
         for ticker, pos in positions.get('short_positions', {}).items():
@@ -340,12 +341,13 @@ class BacktestEngine:
         """
         total_value = cash
         
-        # Value long positions
+        # Value long positions: add unrealized P&L only (capital is the equity base)
         for ticker, pos in positions.get('long_positions', {}).items():
             if ticker in current_prices.index:
                 shares = pos['shares']
+                entry_price = entry_prices.get(ticker, current_prices[ticker])
                 current_price = current_prices[ticker]
-                total_value += shares * current_price
+                total_value += shares * (current_price - entry_price)
         
         # Value short positions (mark-to-market)
         for ticker, pos in positions.get('short_positions', {}).items():
